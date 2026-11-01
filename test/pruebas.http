@@ -1,0 +1,261 @@
+### ==============================================================================
+### TRABAJO PRÁCTICO: VETERINARIA — FASTAPI Y POSTGRESQL (UTN PROGRAMACIÓN III)
+### Casos de prueba mínimos requeridos (C-01 a C-09)
+### Ejecutar contra un servidor iniciado después de correr: python reiniciar.py
+### ==============================================================================
+
+@baseUrl = http://localhost:8000
+@contentType = application/json
+
+### ------------------------------------------------------------------------------
+### VERIFICACIÓN INICIAL DE SALUD OPERATIVA
+### ------------------------------------------------------------------------------
+
+### GET /health/live - Liveness probe (sin tocar base de datos)
+# Resultado esperado: HTTP 200 OK con {"estado": "vivo"}
+GET {{baseUrl}}/health/live
+
+### GET /health/ready - Readiness probe (SELECT 1 contra PostgreSQL)
+# Resultado esperado: HTTP 200 OK con {"estado": "base de datos conectada"}
+GET {{baseUrl}}/health/ready
+
+
+### ==============================================================================
+### CASO C-01: Parámetro de ruta que no es entero
+### Demuestra: Validación automática de contratos y tipado en FastAPI (sección 2.8)
+### ==============================================================================
+
+# GET /duenios/abc
+# Resultado esperado: HTTP 422 Unprocessable Entity
+# El handler no llega a ejecutarse porque FastAPI/Pydantic valida el path parameter 'id: int'.
+GET {{baseUrl}}/duenios/abc
+
+
+### ==============================================================================
+### CASO C-02: Email de dueño o nombre de práctica repetido
+### Demuestra: Garantía UNIQUE delegada en la base sin SELECT previo (RN-01 y RN-02)
+### ==============================================================================
+
+### C-02.1: Intento de crear dueño con email ya existente ('juan.perez@example.com')
+# Resultado esperado: HTTP 409 Conflict
+# { "detail": "El email ya se encuentra registrado" }
+POST {{baseUrl}}/duenios/
+Content-Type: {{contentType}}
+
+{
+  "nombre": "Juan Repetido",
+  "email": "juan.perez@example.com"
+}
+
+### C-02.2: Intento de crear práctica con nombre ya existente ('Consulta general')
+# Resultado esperado: HTTP 409 Conflict
+# { "detail": "Ya existe una práctica con el nombre 'Consulta general'" }
+POST {{baseUrl}}/practicas/
+Content-Type: {{contentType}}
+
+{
+  "nombre": "Consulta general",
+  "precio": "25000.00"
+}
+
+
+### ==============================================================================
+### CASO C-03: Segunda ficha para el mismo dueño
+### Demuestra: Relación uno a uno estricta con UNIQUE en ficha_duenio.duenio_id (RN-03)
+### ==============================================================================
+
+# El Dueño 1 ya posee ficha creada por reiniciar.py. Se intenta crear una segunda ficha.
+# Resultado esperado: HTTP 409 Conflict
+# { "detail": "El dueño ya posee una ficha registrada" }
+POST {{baseUrl}}/duenios/1/ficha
+Content-Type: {{contentType}}
+
+{
+  "telefono": "11-9988-7766",
+  "direccion": "Calle Falsa 123"
+}
+
+
+### ==============================================================================
+### CASO C-04: Mascota con dueño inexistente y Turno con práctica inexistente
+### Demuestra: Integridad referencial (FK), atomicidad y "todo o nada" (RN-INT-01 / RN-INT-02)
+### ==============================================================================
+
+### C-04.1: Mascota con duenio_id inexistente (ej. ID 9999)
+# Resultado esperado: HTTP 409 Conflict
+# { "detail": "El dueño con ID 9999 no existe" }
+POST {{baseUrl}}/mascotas/
+Content-Type: {{contentType}}
+
+{
+  "nombre": "Firulais",
+  "especie": "perro",
+  "duenio_id": 9999
+}
+
+### C-04.2: Turno con una práctica inexistente (ej. ID 9999)
+# Resultado esperado: HTTP 409 Conflict
+# { "detail": "La práctica con ID 9999 no existe en el catálogo" }
+# Del turno NO queda guardado nada (rollback atómico).
+POST {{baseUrl}}/turnos/
+Content-Type: {{contentType}}
+
+{
+  "mascota_id": 1,
+  "fecha": "2026-11-20T15:00:00-03:00",
+  "motivo": "Intento con práctica inexistente",
+  "practicas": [
+    { "practica_id": 1 },
+    { "practica_id": 9999 }
+  ]
+}
+
+
+### ==============================================================================
+### CASO C-05: Borrar dueño con mascotas y borrar un turno
+### Demuestra: ON DELETE RESTRICT (RN-08) vs ON DELETE CASCADE con passive_deletes (RN-09)
+### ==============================================================================
+
+### C-05.1: Intento de borrar Dueño 1 (que tiene a Toby y Milo a su nombre)
+# Resultado esperado: HTTP 409 Conflict
+# { "detail": "No se puede borrar un dueño que tenga mascotas a su nombre" }
+DELETE {{baseUrl}}/duenios/1
+
+### C-05.2: Borrar Turno 1 existente
+# Resultado esperado: HTTP 204 No Content (sin cuerpo de respuesta)
+# PostgreSQL elimina automáticamente sus filas asociadas en turno_practica por CASCADE en base.
+DELETE {{baseUrl}}/turnos/1
+
+### C-05.3: Comprobar que el Turno 1 ya no existe
+# Resultado esperado: HTTP 404 Not Found
+GET {{baseUrl}}/turnos/1
+
+
+### ==============================================================================
+### CASO C-06: Turno válido con dos prácticas
+### Demuestra: Alta atómica, congelamiento de precios del catálogo y total calculado (RN-05, RN-06)
+### ==============================================================================
+
+# Se reserva turno para Mascota 2 ('Milo') con prácticas 1 ($15000.00) y 4 ($8000.00).
+# Ni el precio ni el total viajan en el DTO de alta.
+# Total esperado calculado por el servidor: $23000.00.
+# Resultado esperado: HTTP 201 Created
+POST {{baseUrl}}/turnos/
+Content-Type: {{contentType}}
+
+{
+  "mascota_id": 2,
+  "fecha": "2026-11-25T14:00:00-03:00",
+  "motivo": "Control felino y desparasitación",
+  "practicas": [
+    { "practica_id": 1 },
+    { "practica_id": 4 }
+  ]
+}
+
+
+### ==============================================================================
+### CASO C-07: Detalle de turno con 1 práctica y con 3 prácticas
+### Demuestra: Carga anticipada (joinedload + selectinload) sin problema N+1 (sección 4.6)
+### Ambos detalles deben generar exactamente la misma cantidad fija de consultas (2 consultas)
+### verificable en la consola del servidor con ECHO_SQL=True.
+### ==============================================================================
+
+### Crear Turno A (con 1 práctica) para Mascota 3 ('Luna')
+POST {{baseUrl}}/turnos/
+Content-Type: {{contentType}}
+
+{
+  "mascota_id": 3,
+  "fecha": "2026-11-26T09:00:00-03:00",
+  "motivo": "Consulta simple",
+  "practicas": [
+    { "practica_id": 1 }
+  ]
+}
+
+### Crear Turno B (con 3 prácticas) para Mascota 3 ('Luna')
+POST {{baseUrl}}/turnos/
+Content-Type: {{contentType}}
+
+{
+  "mascota_id": 3,
+  "fecha": "2026-11-27T11:00:00-03:00",
+  "motivo": "Chequeo integral con 3 prácticas",
+  "practicas": [
+    { "practica_id": 1 },
+    { "practica_id": 2 },
+    { "practica_id": 3 }
+  ]
+}
+
+### C-07.1: Consultar detalle de Turno con 1 práctica (ID asignado, ej. 3)
+# Resultado esperado: HTTP 200 OK con mascota y 1 práctica.
+# Consola: Exactamente 2 sentencias SQL (1 con JOIN para mascota, 1 con IN para practicas).
+GET {{baseUrl}}/turnos/3
+
+### C-07.2: Consultar detalle de Turno con 3 prácticas (ID asignado, ej. 4)
+# Resultado esperado: HTTP 200 OK con mascota y 3 prácticas.
+# Consola: Exactamente la misma cantidad de sentencias SQL (2 sentencias), demostrando que no hay N+1.
+GET {{baseUrl}}/turnos/4
+
+
+### ==============================================================================
+### CASO C-08: Restricción CHECK en base de datos
+### Demuestra: El motor PostgreSQL rechaza precios <= 0 aunque se intente por SQL directo
+### Ver archivo: test/c08_check_test.sql
+### ==============================================================================
+
+# Si se intenta vía API crear una práctica con precio <= 0:
+# Resultado esperado: HTTP 422 Unprocessable Entity (validado por DTO gt=0)
+POST {{baseUrl}}/practicas/
+Content-Type: {{contentType}}
+
+{
+  "nombre": "Práctica Inválida",
+  "precio": "0.00"
+}
+
+
+### ==============================================================================
+### CASO C-09: Tres consultas simultáneas al laboratorio y un GET /health/live
+### Demuestra: Ejecución asincrónica sin bloqueo mediante asyncio.to_thread (sección 3.6)
+### Mientras las consultas al laboratorio duermen 1 segundo cada una, GET /health/live responde de inmediato.
+### ==============================================================================
+
+### Consulta 1 a laboratorio
+GET {{baseUrl}}/laboratorio/stock/antirrabica
+
+### Consulta 2 a laboratorio
+GET {{baseUrl}}/laboratorio/stock/sextuple
+
+### Consulta 3 a laboratorio
+GET {{baseUrl}}/laboratorio/stock/triplefelina
+
+### Verificación de salud simultánea (debe responder en < 50ms, sin esperar al laboratorio)
+GET {{baseUrl}}/health/live
+
+
+### ==============================================================================
+### CONSULTAS Y PRUEBAS ADICIONALES (Paginación, PATCH, etc.)
+### ==============================================================================
+
+### Listado paginado de mascotas (página 1, size 20)
+GET {{baseUrl}}/mascotas/?page=1&size=20
+
+### Paginación: Error 422 cuando page > pages
+GET {{baseUrl}}/mascotas/?page=99&size=20
+
+### PATCH parcial de dueño: Modificar solo el nombre manteniendo el email
+PATCH {{baseUrl}}/duenios/2
+Content-Type: {{contentType}}
+
+{
+  "nombre": "María Gómez de López"
+}
+
+### Consulta de dueño con su ficha
+GET {{baseUrl}}/duenios/1
+
+### Consulta de catálogo completo de prácticas
+GET {{baseUrl}}/practicas/

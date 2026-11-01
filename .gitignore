@@ -1,0 +1,27 @@
+# Entorno y credenciales
+.env
+*.env
+!.env.example
+
+# Entorno virtual
+.venv/
+venv/
+ENV/
+env/
+
+# Python cache y compilados
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Testing y cobertura
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Herramientas del orquestador y temporales
+.atl/
+.vscode/
+.idea/
