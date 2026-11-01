@@ -40,7 +40,14 @@ async def get_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
     Obtiene la fábrica de sesiones desde app.state (inicializada en el lifespan)
     y entrega una sesión por petición HTTP.
     """
-    session_factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        # Fallback en caso de ejecución en entornos de prueba donde el servidor ASGI no dispara lifespan
+        engine = get_engine(settings.DATABASE_URL, echo=settings.ECHO_SQL)
+        session_factory = get_session_factory(engine)
+        request.app.state.engine = engine
+        request.app.state.session_factory = session_factory
+
     async with session_factory() as session:
         try:
             yield session

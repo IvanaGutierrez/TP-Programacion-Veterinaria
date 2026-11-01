@@ -54,12 +54,12 @@ async def listar_mascotas(
     # 3. Validación de rango de página
     if total > 0 and page > pages:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Página {page} fuera de rango. Páginas disponibles: {pages}",
         )
     if total == 0 and page > 1:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Página {page} fuera de rango. No existen registros",
         )
 

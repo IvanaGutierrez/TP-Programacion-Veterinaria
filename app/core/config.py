@@ -1,8 +1,8 @@
 import os
 from dotenv import load_dotenv
 
-# Carga variables de entorno desde el archivo .env
-load_dotenv()
+# Carga variables de entorno desde el archivo .env priorizando los valores del proyecto
+load_dotenv(override=True)
 
 
 class Settings:
